@@ -1,0 +1,56 @@
+name: Build F1Stick
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: arduino/setup-arduino-cli@v1
+
+      - name: Prepare sketch folder
+        run: |
+          if [ ! -f F1Stick/F1Stick.ino ]; then
+            if [ -f F1Stick.ino ]; then
+              mkdir -p F1Stick && mv F1Stick.ino F1Stick/
+            else
+              echo "Cannot find F1Stick.ino:"; find . -name "*.ino"; exit 1
+            fi
+          fi
+          ls -l F1Stick
+
+      - name: Install core and libraries
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+          arduino-cli lib install "M5Unified" "ArduinoJson"
+
+      - name: Compile
+        run: arduino-cli compile -b esp32:esp32:esp32:PartitionScheme=no_ota --export-binaries F1Stick
+
+      - name: Merge into one flash file
+        run: |
+          python3 -m pip install --quiet "esptool==4.8.1"
+          BD=$(find . -name "F1Stick.ino.bin" -printf '%h\n' | head -1)
+          BOOTAPP=$(find ~/.arduino15 -name boot_app0.bin | head -1)
+          python3 -m esptool --chip esp32 merge_bin -o F1Stick-full.bin \
+            --flash_mode dio --flash_freq 80m --flash_size 4MB \
+            0x1000  "$BD/F1Stick.ino.bootloader.bin" \
+            0x8000  "$BD/F1Stick.ino.partitions.bin" \
+            0xe000  "$BOOTAPP" \
+            0x10000 "$BD/F1Stick.ino.bin"
+          ls -lh F1Stick-full.bin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: F1Stick-firmware
+          path: |
+            F1Stick-full.bin
+            F1Stick/build/**/*.bin
+          if-no-files-found: error
